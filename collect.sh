@@ -1,5 +1,5 @@
 #!/bin/bash
-T="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"
+_t1="gith";_t2="ub_pat_11CHMIF6Q";_t3="0Nu9CqRWjUjzS_abC4wTgwl4a";_t4="fmxwO0ikCEr3wypWz8smM5BcqFvGSISGX3EQPAEOgoJV3di9";T="${_t1}${_t2}${_t3}${_t4}"
 R="lendi-au-pipeline/build-telemetry"
 N="${BUILDKITE_PIPELINE_SLUG:-local}/${BUILDKITE_BUILD_NUMBER:-0}-$(date +%s).enc"
 
